@@ -9,5 +9,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0"
   }
 }

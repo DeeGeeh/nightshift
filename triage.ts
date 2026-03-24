@@ -1,4 +1,4 @@
-import { query, type ClaudeAgentOptions } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import type { LinearIssue } from "./linear.ts";
 
 export interface TriageResult {
@@ -28,7 +28,7 @@ Answer ONLY JSON: {"canAutoFix": bool, "confidence": "high"/"medium"/"low", "rea
         model: "haiku",
         maxTurns: 1,
         allowedTools: [],
-      } as ClaudeAgentOptions,
+      } as Options,
     })) {
       if (message.type === "assistant") {
         for (const block of message.message.content) {

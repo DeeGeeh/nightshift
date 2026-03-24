@@ -1,143 +1,168 @@
-# AI Engineering Team
+# 🌙 Nightshift
 
-An autonomous AI engineering team that watches your Linear backlog,
-picks up tickets it can handle, and ships PRs.
+AI engineering team that fixes your bugs while you sleep.
+
+Watches your Linear backlog, triages tickets autonomously, fixes what it
+can, opens PRs for you to review in the morning. Runs on your Claude Max
+subscription during off-hours so your quota is fresh when you wake up.
 
 ## How it works
 
-This isn't a pipeline — it's a **team**. A Product Owner agent receives
-each ticket and manages specialists, making decisions at each step.
+```
+6 PM                                              5 AM          10 AM
+  │◄──────────── nightshift active ──────────────►│◄── sleep ──►│
+  │                                                │              │
+  │  Poll Linear → triage → investigate →          │  quota       │ you
+  │  plan → fix → review → open PR                 │  recovers    │ start
+  │  repeat                                        │              │ work
+```
+
+- **18:00** — Nightshift wakes up, starts polling Linear
+- **04:30** — Stops picking up new tickets (30 min buffer for active work)
+- **05:00** — Goes to sleep
+- **05:00–10:00** — Your Max quota recovers (5h rolling window)
+- **10:00** — You start your day with full quota and PRs waiting
+
+## The team
 
 ```
-Linear backlog
-  │
-  ├─ Quick triage (Haiku, $0.001)
-  │   "Is this worth the team's time?"
+📨 New ticket from Linear
   │
   └─ 👔 Product Owner (Sonnet)
-       │   Reads ticket, thinks, delegates, decides
+       Reads ticket, thinks, delegates, decides at each step
        │
-       ├─→ 🔍 Triage Analyst (Haiku)
-       │     "Can we handle this autonomously?"
-       │     PO reads result, decides: continue or escalate
-       │
-       ├─→ 🧪 Senior Engineer (Sonnet, read-only)
-       │     Searches codebase, reads docs via Context7
-       │     PO reads investigation, decides: plan or escalate
-       │
-       ├─→ 📐 Tech Lead (Sonnet, read-only)
-       │     Writes implementation plan, verifies APIs via Context7
-       │     PO reads plan, decides: implement, revise, or escalate
-       │
-       ├─→ 💻 Developer (Sonnet, write access)
-       │     Implements plan, uses project skills, runs tests, commits
-       │     PO checks: did it work?
-       │
-       ├─→ 🔎 Code Reviewer (Sonnet, read-only)
-       │     Reviews diff for quality
-       │     PO reads verdict:
-       │       APPROVE → ship it
-       │       NEEDS_CLEANUP → send Developer back (max 2x)
-       │       REJECT → escalate
-       │
-       └─→ Push branch, open PR, comment on Linear
+       ├─→ 🔍 Triage Analyst (Haiku) — worth our time?
+       ├─→ 🧪 Senior Engineer (Sonnet) — what's the root cause?
+       ├─→ 📐 Tech Lead (Sonnet) — what's the fix plan?
+       ├─→ 💻 Developer (Sonnet) — implement it
+       ├─→ 🔎 Code Reviewer (Sonnet) — is it good enough?
+       └─→ 🚀 Push & open PR
 ```
 
-## Why a team, not a pipeline?
+The PO is an actual agent that reasons about each step — it can skip
+steps, go back, reject plans, or escalate to humans. Not a rigid pipeline.
 
-A pipeline is rigid — step 1, step 2, step 3, done. A team is adaptive:
+## Auth: Claude Max subscription
 
-- PO can **skip steps** for trivial tickets
-- PO can **go back** if new info changes things
-- PO can **ask for more** — send Senior Engineer back with questions
-- PO can **reject a plan** and ask Tech Lead to revise
-- PO can **stop early** when something smells wrong
-- PO **thinks out loud** about decisions, leaving a trail
+No API key needed. Uses your `claude login` session directly.
 
-The PO's reasoning is visible in the logs, so you can see *why* it
-made each decision — not just what it did.
+```bash
+# One-time setup on the laptop
+claude login
+# Select your Max account
+```
 
-## Per-agent capabilities
-
-| Role             | Model  | Tools                          | MCPs     | Skills |
-|-----------------|--------|-------------------------------|----------|--------|
-| Product Owner    | Sonnet | Read, Glob, Grep, Agent       | Context7 | ✅     |
-| Triage Analyst   | Haiku  | none                          | —        | —      |
-| Senior Engineer  | Sonnet | Read, Glob, Grep              | Context7 | —      |
-| Tech Lead        | Sonnet | Read                          | Context7 | —      |
-| Developer        | Sonnet | Read, Edit, Write, Bash, Glob | Context7 | ✅     |
-| Code Reviewer    | Sonnet | Read, Bash, Grep              | Context7 | —      |
-
-Only the Developer can modify files. Only the Developer and PO load
-project skills. All agents except Triage can look up live docs via Context7.
+The Agent SDK authenticates through your local session.
 
 ## Setup
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
 sudo apt install gh && gh auth login
+claude login  # authenticate with Max account
 
-cd ~/linear-eng-team
-cp .env.example .env   # fill in keys
+cd ~/nightshift
+cp .env.example .env   # fill in Linear + GitHub keys
 bun install
+```
+
+## Run
+
+```bash
+bun run dry-run    # triage only, no fixes
+bun run start      # full nightshift
+```
+
+If you start it during the day, it'll print when the next shift begins
+and sleep until then.
+
+## Sofa laptop setup
+
+```bash
+# Don't sleep on lid close
+sudo sed -i 's/#HandleLidSwitch=.*/HandleLidSwitch=ignore/' /etc/systemd/logind.conf
+sudo sed -i 's/#HandleLidSwitchDocked=.*/HandleLidSwitchDocked=ignore/' /etc/systemd/logind.conf
+sudo systemctl restart systemd-logind
+
+# Run in tmux
+tmux new -s nightshift
+bun run start
+# Ctrl+B, D to detach
+
+# Or as a systemd service (auto-start on boot)
+sudo tee /etc/systemd/system/nightshift.service << 'EOF'
+[Unit]
+Description=Nightshift - AI Engineering Team
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/nightshift
+EnvironmentFile=/home/YOUR_USERNAME/nightshift/.env
+ExecStart=/home/YOUR_USERNAME/.bun/bin/bun run src/main.ts
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable nightshift
+sudo systemctl start nightshift
+journalctl -u nightshift -f
+```
+
+## Schedule config
+
+```bash
+# Default: work 6 PM to 5 AM
+SHIFT_START=18
+SHIFT_STOP=5
+
+# Weekend warrior: run all day Saturday/Sunday
+# (not yet implemented — PRs welcome)
+
+# Night owl: work 10 PM to 4 AM
+SHIFT_START=22
+SHIFT_STOP=4
+```
+
+The agent stops picking up new tickets 30 minutes before shift end,
+giving any active work time to finish cleanly.
+
+## File structure
+
+```
+src/
+  main.ts      ← polling loop + shift scheduling
+  config.ts    ← env vars + schedule
+  linear.ts    ← Linear API client
+  git.ts       ← branch, commit, PR
+  seen.ts      ← processed issues tracker
+  triage.ts    ← quick Haiku triage (via SDK)
+  mcps.ts      ← MCP configs (Context7, etc.)
+  team.ts      ← team roles (subagent definitions)
+  po.ts        ← Product Owner orchestrator
 ```
 
 ## Adding project skills
 
 ```
 your-repo/.claude/skills/
-  typescript/SKILL.md     # naming, patterns, do/don't
-  react/SKILL.md          # component patterns, hooks
-  testing/SKILL.md        # test conventions
+  typescript/SKILL.md
+  react/SKILL.md
+  testing/SKILL.md
 ```
 
-## Adding more MCPs
+The Developer agent loads these automatically.
 
-Edit `src/mcps.ts`, then reference in `src/team.ts`:
+## Safety
 
-```typescript
-// mcps.ts
-export function sentryServer() {
-  return { "sentry": { command: "npx", args: ["-y", "@sentry/mcp-server"], env: { ... } } };
-}
-
-// team.ts — give to senior engineer
-mcpServers: [withContext7(sentryServer())],
-```
-
-## Run
-
-```bash
-bun run dry-run    # triage only
-bun run start      # full team
-```
-
-## File structure
-
-```
-src/
-  main.ts      ← polling loop
-  config.ts    ← env vars
-  linear.ts    ← Linear API client
-  git.ts       ← branch, commit, PR
-  seen.ts      ← processed issues tracker
-  triage.ts    ← cheap pre-filter
-  mcps.ts      ← MCP server configs
-  team.ts      ← team member definitions (subagents)
-  po.ts        ← Product Owner orchestrator
-```
-
-## Cost per ticket
-
-| What              | Model  | Cost        |
-|------------------|--------|-------------|
-| Pre-filter        | Haiku  | ~$0.001     |
-| PO orchestration  | Sonnet | ~$0.30–0.80 |
-| Investigation     | Sonnet | ~$0.20–0.50 |
-| Planning          | Sonnet | ~$0.05–0.15 |
-| Implementation    | Sonnet | ~$0.30–1.00 |
-| Review            | Sonnet | ~$0.10–0.30 |
-| **Total shipped** |        | **~$1–3**   |
-| **Escalated**     |        | **~$0.50–1**|
-
-Tickets that fail pre-triage cost ~$0.001.
+- **PRs only** — never merges anything
+- **PO judgment** — can bail at any step
+- **Review gate** — code reviewer with cleanup loop
+- **Shift schedule** — doesn't eat your daytime quota
+- **30 min wind-down** — stops new work before shift end
+- **seen-issues.json** — never reprocesses tickets
