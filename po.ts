@@ -25,7 +25,9 @@ import {
   triageAnalyst,
   seniorEngineer,
   techLead,
-  developer,
+  frontendDev,
+  backendDev,
+  polishDev,
   codeReviewer,
 } from "./team.ts";
 import { withContext7 } from "./mcps.ts";
@@ -67,7 +69,9 @@ You have these team members available as subagents:
 - **triage-analyst**: Quick assessment — is this ticket suitable for our team to handle autonomously? Always start here.
 - **senior-engineer**: Deep investigation — searches the codebase, reads docs, identifies root cause. Read-only.
 - **tech-lead**: Creates a precise implementation plan from the investigation. Read-only.
-- **developer**: Implements the fix following the tech lead's plan. Has write access. Follows instructions exactly.
+- **frontend-dev**: Implements frontend fixes — React components, Next.js pages/routes, Tailwind styling, UI logic. Expert in App Router, Server Components, modern React.
+- **backend-dev**: Implements backend/infra fixes — monorepo config, build tooling, API routes, server logic, CI/CD. Expert in Turborepo and backend patterns.
+- **polish-dev**: UI polish and cleanup — alignment, spacing, consistency, visual micro-details. Use after the main fix for a quality pass (optional).
 - **code-reviewer**: Reviews the git diff for quality. Strict — must pass before shipping.
 
 ## How You Work
@@ -83,8 +87,12 @@ Your workflow (adapt as needed — you're the PO, use judgment):
 3. **Plan**: Send investigation to tech-lead. Read their plan.
    - If the plan seems risky or too broad, STOP.
    - If you want changes to the plan, tell the tech-lead what to adjust.
-4. **Implement**: Send the plan to developer. They'll code it, run tests, and commit.
+4. **Implement**: Pick the right developer based on the investigation:
+   - **frontend-dev** for UI components, pages, styling, client/server component issues.
+   - **backend-dev** for build config, monorepo, API routes, server logic.
+   - When in doubt, check which files are affected — if they're in \`app/\`, \`components/\`, or have JSX/TSX, use frontend-dev.
    - If they report problems, decide: retry with adjusted instructions, or escalate.
+   - Optionally send to **polish-dev** after the main fix for a visual quality pass.
 5. **Review**: Send to code-reviewer. Read their verdict.
    - APPROVE → you're done, report success.
    - NEEDS_CLEANUP → send cleanup instructions back to developer, then re-review. Max 2 rounds.
@@ -145,7 +153,9 @@ ABANDONED = not worth fixing or not a real bug.
           "triage-analyst": triageAnalyst,
           "senior-engineer": seniorEngineer,
           "tech-lead": techLead,
-          "developer": developer,
+          "frontend-dev": frontendDev,
+          "backend-dev": backendDev,
+          "polish-dev": polishDev,
           "code-reviewer": codeReviewer,
         },
       } as any,

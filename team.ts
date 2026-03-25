@@ -11,7 +11,9 @@
  *   ├── Triage Analyst     — quick assessment: auto-fixable?
  *   ├── Senior Engineer    — investigates root cause
  *   ├── Tech Lead          — writes implementation plan
- *   ├── Developer          — implements the fix
+ *   ├── Frontend Dev       — React/Next.js/Tailwind implementation
+ *   ├── Backend Dev        — monorepo, build, backend logic
+ *   ├── Polish Dev         — UI cleanup, visual QA, finishing
  *   └── Code Reviewer      — reviews before PR
  *
  * The PO is the only agent that runs as the main query().
@@ -52,6 +54,12 @@ export const seniorEngineer: AgentDefinition = {
     "Investigates a bug by searching the codebase and reading documentation. " +
     "Read-only. Returns a detailed investigation report.",
   model: "sonnet",
+  skills: [
+    "next-best-practices",
+    "next-cache-components",
+    "vercel-react-best-practices",
+    "turborepo",
+  ],
   tools: [
     "Read", "Glob", "Grep",
     "mcp__context7__resolve-library-id",
@@ -100,6 +108,12 @@ export const techLead: AgentDefinition = {
     "Creates a precise implementation plan from an investigation report. " +
     "Read-only. Verifies correct API usage via documentation.",
   model: "sonnet",
+  skills: [
+    "next-best-practices",
+    "next-cache-components",
+    "vercel-react-best-practices",
+    "turborepo",
+  ],
   tools: [
     "Read",
     "mcp__context7__resolve-library-id",
@@ -134,29 +148,9 @@ Rules:
 - If investigation has CONFIDENCE: low → ABORT.`,
 };
 
-// ─── Developer ──────────────────────────────────────────────────────
-// Implements the plan. Write access. Gets project skills.
+// ─── Shared developer rules ─────────────────────────────────────────
 
-export const developer: AgentDefinition = {
-  description:
-    "Implements a bug fix following a plan from the tech lead. " +
-    "Has write access and project skills. Follows the plan exactly.",
-  model: "sonnet",
-  tools: [
-    "Read", "Edit", "Write", "Bash", "Glob",
-    "Skill",
-    "mcp__context7__resolve-library-id",
-    "mcp__context7__get-library-docs",
-  ],
-  mcpServers: [withContext7()],
-  maxTurns: 50,
-  prompt: `You are a developer on the team. You receive a plan from the tech lead and implement it exactly.
-
-You have:
-- Context7 for looking up current API docs
-- Project skills (.claude/skills/) for coding conventions
-
-Rules:
+const DEV_RULES = `Rules:
 - Follow the plan step by step. Do not deviate.
 - Make ONLY the changes in the plan.
 - Do NOT refactor, rename, or "improve" surrounding code.
@@ -173,7 +167,91 @@ Quality — your code must look human-written:
 - No unnecessary imports or dead code.
 - Verify API usage with Context7 if unsure.
 
-If the plan is unclear, say so. Don't guess.`,
+If the plan is unclear, say so. Don't guess.`;
+
+const DEV_TOOLS = [
+  "Read", "Edit", "Write", "Bash", "Glob",
+  "Skill",
+  "mcp__context7__resolve-library-id",
+  "mcp__context7__get-library-docs",
+] as const;
+
+// ─── Frontend Developer ────────────────────────────────────────────
+// React, Next.js, Tailwind, UI components.
+
+export const frontendDev: AgentDefinition = {
+  description:
+    "Implements frontend fixes: React components, Next.js pages/routes, " +
+    "Tailwind styling, UI logic. Use for anything touching the UI layer.",
+  model: "sonnet",
+  skills: [
+    "next-best-practices",
+    "next-cache-components",
+    "vercel-react-best-practices",
+    "building-components",
+    "tailwind-design-system",
+    "frontend-design",
+  ],
+  tools: [...DEV_TOOLS],
+  mcpServers: [withContext7()],
+  maxTurns: 50,
+  prompt: `You are a frontend developer specializing in React, Next.js 15+, and Tailwind CSS. You receive a plan from the tech lead and implement it exactly.
+
+You have:
+- Context7 for looking up current API docs
+- Deep knowledge of App Router, Server Components, Server Actions, and modern React patterns
+
+${DEV_RULES}`,
+};
+
+// ─── Backend Developer ─────────────────────────────────────────────
+// Monorepo config, build tooling, backend logic, CI/CD.
+
+export const backendDev: AgentDefinition = {
+  description:
+    "Implements backend/infra fixes: monorepo config, build tooling, " +
+    "API routes, server logic, CI/CD. Use for non-UI work.",
+  model: "sonnet",
+  skills: [
+    "turborepo",
+    "workflow",
+  ],
+  tools: [...DEV_TOOLS],
+  mcpServers: [withContext7()],
+  maxTurns: 50,
+  prompt: `You are a backend developer specializing in TypeScript, monorepo tooling, and server-side logic. You receive a plan from the tech lead and implement it exactly.
+
+You have:
+- Context7 for looking up current API docs
+- Deep knowledge of Turborepo, build pipelines, and backend patterns
+
+${DEV_RULES}`,
+};
+
+// ─── Polish Developer ──────────────────────────────────────────────
+// UI cleanup, visual QA, micro-details, finishing touches.
+
+export const polishDev: AgentDefinition = {
+  description:
+    "Handles UI polish and cleanup: alignment, spacing, consistency, " +
+    "visual micro-details. Use after main fix for quality pass.",
+  model: "sonnet",
+  skills: [
+    "polish",
+    "before-and-after",
+    "frontend-design",
+    "tailwind-design-system",
+  ],
+  tools: [...DEV_TOOLS],
+  mcpServers: [withContext7()],
+  maxTurns: 30,
+  prompt: `You are a polish developer specializing in UI quality and visual finishing. You receive instructions and make precise, minimal adjustments to improve visual quality.
+
+You have:
+- Context7 for looking up current API docs
+- Expertise in spacing, alignment, typography, and visual consistency
+
+${DEV_RULES}`,
 };
 
 // ─── Code Reviewer ──────────────────────────────────────────────────
@@ -184,6 +262,12 @@ export const codeReviewer: AgentDefinition = {
     "Reviews a git diff for quality, correctness, and style. " +
     "Read-only. Returns approve/reject/needs-cleanup.",
   model: "sonnet",
+  skills: [
+    "next-best-practices",
+    "vercel-react-best-practices",
+    "building-components",
+    "tailwind-design-system",
+  ],
   tools: [
     "Read", "Bash", "Grep",
     "mcp__context7__resolve-library-id",

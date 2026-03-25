@@ -1,8 +1,20 @@
 import { CONFIG } from "./config.ts";
 import type { LinearIssue } from "./linear.ts";
 
+const GIT_AUTHOR = {
+  GIT_AUTHOR_NAME: "Nightshift",
+  GIT_AUTHOR_EMAIL: "nightshift-bot@noreply",
+  GIT_COMMITTER_NAME: "Nightshift",
+  GIT_COMMITTER_EMAIL: "nightshift-bot@noreply",
+};
+
 export async function sh(cmd: string, cwd: string = CONFIG.repoPath): Promise<string> {
-  const proc = Bun.spawn(["bash", "-c", cmd], { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["bash", "-c", cmd], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ...GIT_AUTHOR },
+  });
   const out = await new Response(proc.stdout).text();
   const err = await new Response(proc.stderr).text();
   const code = await proc.exited;

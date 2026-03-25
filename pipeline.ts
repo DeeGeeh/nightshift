@@ -8,7 +8,7 @@
  *   - Project skills loaded for the fixer
  */
 
-import { query, type ClaudeAgentOptions } from "@anthropic-ai/claude-agent-sdk";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { investigator, planner, fixer, reviewer } from "./agents.ts";
 import { withContext7 } from "./mcps.ts";
 import { CONFIG } from "./config.ts";
@@ -16,7 +16,7 @@ import type { LinearIssue } from "./linear.ts";
 import { addComment, addLabelToIssue, updateIssueState } from "./linear.ts";
 import { prepareBranch, branchHasCommits, pushAndCreatePR, returnToMain } from "./git.ts";
 import { markSeen } from "./seen.ts";
-import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
+import type { AgentDefinition, Options } from "@anthropic-ai/claude-agent-sdk";
 
 // ─── Agent runner ────────────────────────────────────────────────────
 
@@ -32,7 +32,8 @@ async function runAgent(
 ): Promise<string> {
   let output = "";
 
-  const options: ClaudeAgentOptions = {
+  const options: Options = {
+    agent: name,
     permissionMode: "bypassPermissions",
     cwd: CONFIG.repoPath,
     model: agentDef.model ?? "sonnet",
