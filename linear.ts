@@ -1,18 +1,42 @@
 import { CONFIG } from "./config.ts";
 
 async function gql(query: string, variables: Record<string, unknown> = {}) {
-  const res = await fetch("https://api.linear.app/graphql", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: CONFIG.linearApiKey,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) throw new Error(`Linear API ${res.status}: ${await res.text()}`);
-  const json = (await res.json()) as any;
-  if (json.errors) throw new Error(`Linear GraphQL: ${JSON.stringify(json.errors)}`);
-  return json.data;
+  const maxRetries = 3;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch("https://api.linear.app/graphql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: CONFIG.linearApiKey,
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        const retryable = res.status === 429 || res.status >= 500;
+        if (retryable && attempt < maxRetries) {
+          const delay = Math.min(1000 * 2 ** attempt, 10_000);
+          console.warn(`Linear API ${res.status}, retrying in ${delay}ms (${attempt + 1}/${maxRetries})`);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+        throw new Error(`Linear API ${res.status}: ${body}`);
+      }
+      const json = (await res.json()) as any;
+      if (json.errors) throw new Error(`Linear GraphQL: ${JSON.stringify(json.errors)}`);
+      return json.data;
+    } catch (err: any) {
+      if (attempt < maxRetries && err.message?.includes("fetch failed")) {
+        const delay = Math.min(1000 * 2 ** attempt, 10_000);
+        console.warn(`Linear API network error, retrying in ${delay}ms (${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("unreachable");
 }
 
 export interface LinearIssue {
@@ -27,30 +51,46 @@ export interface LinearIssue {
 }
 
 export async function fetchNewIssues(): Promise<LinearIssue[]> {
-  const teamFilter = CONFIG.teamKey
-    ? `team: { key: { eq: "${CONFIG.teamKey}" } }`
-    : "";
+  const fields = `id identifier title description url team { key } state { name } labels { nodes { name } }`;
+
+  if (CONFIG.teamKey) {
+    const data = await gql(
+      `query($teamKey: String!) {
+        issues(
+          filter: {
+            state: { type: { in: ["backlog", "unstarted", "triage"] } }
+            team: { key: { eq: $teamKey } }
+          }
+          first: 20
+          orderBy: createdAt
+        ) { nodes { ${fields} } }
+      }`,
+      { teamKey: CONFIG.teamKey }
+    );
+    return data.issues.nodes;
+  }
 
   const data = await gql(`
     query {
       issues(
-        filter: {
-          state: { type: { in: ["backlog", "unstarted", "triage"] } }
-          ${teamFilter}
-        }
+        filter: { state: { type: { in: ["backlog", "unstarted", "triage"] } } }
         first: 20
         orderBy: createdAt
-      ) {
-        nodes {
-          id identifier title description url
-          team { key }
-          state { name }
-          labels { nodes { name } }
-        }
-      }
+      ) { nodes { ${fields} } }
     }
   `);
   return data.issues.nodes;
+}
+
+export async function fetchIssueByIdentifier(identifier: string): Promise<LinearIssue | null> {
+  const fields = `id identifier title description url team { key } state { name } labels { nodes { name } }`;
+  const data = await gql(
+    `query($identifier: String!) {
+      issueByIdentifier(identifier: $identifier) { ${fields} }
+    }`,
+    { identifier: identifier.toUpperCase() }
+  );
+  return data.issueByIdentifier ?? null;
 }
 
 export async function updateIssueState(issueId: string, stateName: string) {
@@ -82,9 +122,10 @@ export async function addComment(issueId: string, body: string) {
 }
 
 async function getOrCreateLabel(name: string): Promise<string> {
-  const data = await gql(`
-    query { issueLabels(filter: { name: { eq: "${name}" } }) { nodes { id } } }
-  `);
+  const data = await gql(
+    `query($name: String!) { issueLabels(filter: { name: { eq: $name } }) { nodes { id } } }`,
+    { name }
+  );
   if (data.issueLabels.nodes.length > 0) return data.issueLabels.nodes[0].id;
   const create = await gql(
     `mutation($name: String!) {
@@ -95,6 +136,19 @@ async function getOrCreateLabel(name: string): Promise<string> {
     { name }
   );
   return create.issueLabelCreate.issueLabel.id;
+}
+
+export async function createDocument(title: string, content: string): Promise<string> {
+  const data = await gql(
+    `mutation($title: String!, $content: String!) {
+      documentCreate(input: { title: $title, content: $content }) {
+        document { id url }
+        success
+      }
+    }`,
+    { title, content }
+  );
+  return data.documentCreate.document.url;
 }
 
 export async function addLabelToIssue(issueId: string, labelName: string) {

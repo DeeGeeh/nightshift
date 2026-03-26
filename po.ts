@@ -35,12 +35,21 @@ import { CONFIG } from "./config.ts";
 import type { LinearIssue } from "./linear.ts";
 import { addComment, addLabelToIssue, updateIssueState } from "./linear.ts";
 import { prepareBranch, branchHasCommits, pushAndCreatePR, returnToMain } from "./git.ts";
+import type { PRResult } from "./git.ts";
 import { markSeen } from "./seen.ts";
 
 /**
  * Hand a ticket to the Product Owner and let it run the team.
  */
-export async function assignToTeam(issue: LinearIssue): Promise<void> {
+export interface TeamResult {
+  outcome: "done" | "needs-human" | "failed";
+  prUrl?: string;
+  summary?: string;
+  diffStats?: string;
+  commitLog?: string;
+}
+
+export async function assignToTeam(issue: LinearIssue): Promise<TeamResult> {
   const tag = `[${issue.identifier}]`;
 
   try {
@@ -133,57 +142,64 @@ ABANDONED = not worth fixing or not a real bug.
     let poOutput = "";
     let outcome: "SHIPPED" | "ESCALATED" | "ABANDONED" | "UNKNOWN" = "UNKNOWN";
 
-    for await (const message of query({
-      prompt: poPrompt,
-      options: {
-        model: "sonnet",
-        allowedTools: [
-          "Read", "Glob", "Grep", "Agent",  // PO can read code + delegate
-          "mcp__context7__resolve-library-id",
-          "mcp__context7__get-library-docs",
-        ],
-        mcpServers: withContext7(),
-        permissionMode: "bypassPermissions",
-        cwd: CONFIG.repoPath,
-        maxTurns: 200,  // PO needs room — it's running a whole team
-        settingSources: ["project" as const],  // load CLAUDE.md, skills
+    const runAgent = async () => {
+      for await (const message of query({
+        prompt: poPrompt,
+        options: {
+          model: "sonnet",
+          allowedTools: [
+            "Read", "Glob", "Grep", "Agent",  // PO can read code + delegate
+            "mcp__context7__resolve-library-id",
+            "mcp__context7__get-library-docs",
+          ],
+          mcpServers: withContext7(),
+          permissionMode: "bypassPermissions",
+          cwd: CONFIG.repoPath,
+          maxTurns: 200,  // PO needs room — it's running a whole team
+          settingSources: ["project" as const],  // load CLAUDE.md, skills
 
-        // ── The Team ──
-        agents: {
-          "triage-analyst": triageAnalyst,
-          "senior-engineer": seniorEngineer,
-          "tech-lead": techLead,
-          "frontend-dev": frontendDev,
-          "backend-dev": backendDev,
-          "polish-dev": polishDev,
-          "code-reviewer": codeReviewer,
-        },
-      } as any,
-    })) {
-      if (message.type === "assistant") {
-        for (const block of message.message.content) {
-          if ("text" in block && block.text) {
-            poOutput += block.text + "\n";
-            // Log PO's thinking in real-time
-            if (block.text.includes("OUTCOME:") || block.text.includes("→") || block.text.includes("Decision:")) {
-              console.log(`${tag} PO: ${block.text.slice(0, 120)}`);
+          // ── The Team ──
+          agents: {
+            "triage-analyst": triageAnalyst,
+            "senior-engineer": seniorEngineer,
+            "tech-lead": techLead,
+            "frontend-dev": frontendDev,
+            "backend-dev": backendDev,
+            "polish-dev": polishDev,
+            "code-reviewer": codeReviewer,
+          },
+        } as any,
+      })) {
+        if (message.type === "assistant") {
+          for (const block of message.message.content) {
+            if ("text" in block && block.text) {
+              poOutput += block.text + "\n";
+              if (block.text.includes("OUTCOME:") || block.text.includes("→") || block.text.includes("Decision:")) {
+                console.log(`${tag} PO: ${block.text.slice(0, 120)}`);
+              }
+            } else if ("name" in block && block.name === "Agent") {
+              const sub = (block.input as any)?.subagent_type ?? (block.input as any)?.description ?? "?";
+              console.log(`${tag} 📨 PO delegated to: ${sub}`);
             }
-          } else if ("name" in block && block.name === "Agent") {
-            const sub = (block.input as any)?.subagent_type ?? (block.input as any)?.description ?? "?";
-            console.log(`${tag} 📨 PO delegated to: ${sub}`);
           }
         }
       }
-    }
+    };
 
-    // ── Parse outcome ──
-    if (poOutput.includes("OUTCOME: SHIPPED")) outcome = "SHIPPED";
-    else if (poOutput.includes("OUTCOME: ESCALATED")) outcome = "ESCALATED";
-    else if (poOutput.includes("OUTCOME: ABANDONED")) outcome = "ABANDONED";
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Agent timed out after ${CONFIG.agentTimeoutMs / 60_000}min`)), CONFIG.agentTimeoutMs)
+    );
+    await Promise.race([runAgent(), timeout]);
 
-    // ── Extract summary ──
+    // ── Parse outcome from <result> block only ──
     const resultMatch = poOutput.match(/<result>([\s\S]*?)<\/result>/i);
-    const summary = resultMatch?.[1]?.trim() ?? poOutput.slice(-500);
+    const resultBlock = resultMatch?.[1]?.trim() ?? "";
+    if (resultBlock.includes("OUTCOME: SHIPPED")) outcome = "SHIPPED";
+    else if (resultBlock.includes("OUTCOME: ESCALATED")) outcome = "ESCALATED";
+    else if (resultBlock.includes("OUTCOME: ABANDONED")) outcome = "ABANDONED";
+
+    const summary = resultBlock || poOutput.slice(-500);
+    const cleanSummary = summary.replace(/<[^>]+>/g, "").replace(/OUTCOME:\s*\w+\s*/i, "").replace(/SUMMARY:\s*/i, "").trim();
 
     // ── Act on outcome ──
     switch (outcome) {
@@ -193,47 +209,59 @@ ABANDONED = not worth fixing or not a real bug.
           await addComment(issue.id, "🤖 Team attempted a fix but no changes were committed.");
           await addLabelToIssue(issue.id, "needs-human");
           markSeen(issue, "failed");
-          break;
+          await returnToMain();
+          return { outcome: "failed", summary: cleanSummary };
         }
 
         try {
-          const prUrl = await pushAndCreatePR(branch, issue);
-          console.log(`${tag} ✅ PR: ${prUrl}`);
+          const pr: PRResult = await pushAndCreatePR(branch, issue);
+          console.log(`${tag} ✅ PR: ${pr.prUrl}`);
           await addComment(
             issue.id,
-            `✅ AI team shipped a fix: ${prUrl}\n\n${summary.replace(/<[^>]+>/g, "").slice(0, 500)}`
+            `✅ AI team shipped a fix: ${pr.prUrl}\n\n${cleanSummary.slice(0, 500)}`
           );
           await updateIssueState(issue.id, "in review");
           await addLabelToIssue(issue.id, "auto-fix");
           markSeen(issue, "done");
+          await returnToMain();
+          return {
+            outcome: "done",
+            prUrl: pr.prUrl,
+            summary: cleanSummary,
+            diffStats: pr.diffStats,
+            commitLog: pr.commitLog,
+          };
         } catch (err: any) {
           console.error(`${tag} PR failed:`, err.message);
           await addComment(issue.id, `⚠️ Fix on \`${branch}\` but PR failed:\n\`\`\`\n${err.message}\n\`\`\``);
           markSeen(issue, "done");
+          await returnToMain();
+          return { outcome: "failed", summary: cleanSummary };
         }
-        break;
       }
 
       case "ESCALATED": {
         console.log(`${tag} ⬆️ Escalated to humans`);
         await addComment(
           issue.id,
-          `🤖 AI team investigated but is escalating to humans.\n\n${summary.replace(/<[^>]+>/g, "").slice(0, 500)}`
+          `🤖 AI team investigated but is escalating to humans.\n\n${cleanSummary.slice(0, 500)}`
         );
         await addLabelToIssue(issue.id, "needs-human");
         markSeen(issue, "failed");
-        break;
+        await returnToMain();
+        return { outcome: "needs-human", summary: cleanSummary };
       }
 
       case "ABANDONED": {
         console.log(`${tag} 🗑️ Abandoned`);
         await addComment(
           issue.id,
-          `🤖 AI team assessed this ticket and decided not to pursue it.\n\n${summary.replace(/<[^>]+>/g, "").slice(0, 500)}`
+          `🤖 AI team assessed this ticket and decided not to pursue it.\n\n${cleanSummary.slice(0, 500)}`
         );
         await addLabelToIssue(issue.id, "needs-human");
         markSeen(issue, "failed");
-        break;
+        await returnToMain();
+        return { outcome: "needs-human", summary: cleanSummary };
       }
 
       default: {
@@ -241,10 +269,10 @@ ABANDONED = not worth fixing or not a real bug.
         await addComment(issue.id, "🤖 AI team session ended without a clear result. Needs human review.");
         await addLabelToIssue(issue.id, "needs-human");
         markSeen(issue, "failed");
+        await returnToMain();
+        return { outcome: "failed" };
       }
     }
-
-    await returnToMain();
 
   } catch (err: any) {
     console.error(`${tag} Team error:`, err.message);
@@ -252,5 +280,6 @@ ABANDONED = not worth fixing or not a real bug.
     await addLabelToIssue(issue.id, "needs-human");
     markSeen(issue, "failed");
     try { await returnToMain(); } catch { /* best effort */ }
+    return { outcome: "failed", summary: err.message };
   }
 }

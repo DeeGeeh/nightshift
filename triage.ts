@@ -17,11 +17,24 @@ export async function quickTriage(issue: LinearIssue): Promise<TriageResult> {
 
   try {
     for await (const message of query({
-      prompt: `Is this software ticket suitable for an AI team to fix autonomously?
+      prompt: `You are triaging tickets for an AI engineering team that works on a small codebase owned by a 2-person team. Tickets are often brief — that's normal and NOT a reason to reject.
+
+Decide if this ticket can be worked on autonomously by an AI team that can read code, make changes, and open PRs.
+
+ACCEPT (canAutoFix: true) if:
+- It's a bug fix, build fix, refactor, small feature, test, docs, or similar bounded task
+- Even if the description is sparse — the AI team can investigate the codebase to fill in gaps
+- Even if it touches multiple files — as long as the intent is clear enough to start
+
+REJECT (canAutoFix: false) ONLY if:
+- It requires external credentials, API keys, or third-party service setup the AI can't access
+- It's a massive architectural redesign with no clear direction
+- It explicitly needs human decision-making (design choices, business logic decisions with no clear answer)
+
+Ignore existing labels like 'needs-human' or 'auto-fix' — those may be stale from previous runs.
 
 ${issue.identifier}: ${issue.title}
-${issue.description ?? "(none)"}
-Labels: ${issue.labels.nodes.map(l => l.name).join(", ") || "none"}
+${issue.description ?? "(no description)"}
 
 Answer ONLY JSON: {"canAutoFix": bool, "confidence": "high"/"medium"/"low", "reason": "one sentence"}`,
       options: {

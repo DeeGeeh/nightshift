@@ -3,4 +3,5 @@
 node_modules/
 .claude
 seen-issues.json
+seen-comments.json
 skills-lock.json

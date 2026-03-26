@@ -37,7 +37,7 @@ export const triageAnalyst: AgentDefinition = {
   prompt: `You are a triage analyst on an engineering team. You assess tickets to determine if they can be fixed autonomously by an AI developer.
 
 A ticket IS suitable if ALL true:
-- Concrete bug or small well-defined task (not vague, not "investigate", not a feature request)
+- Concrete bug or small well-defined task (not vague, not "investigate", not a feature request unless a small feature)
 - Likely localized (1-3 files)
 - NOT: infrastructure, deployment, auth/security, payments, DB migrations, env config, secrets
 - Description has enough context to understand the problem
@@ -252,6 +252,56 @@ You have:
 - Expertise in spacing, alignment, typography, and visual consistency
 
 ${DEV_RULES}`,
+};
+
+// ─── Cleanup Developer ────────────────────────────────────────────
+// DRY refactoring — finds duplicated code and extracts shared utilities.
+
+export const cleanupDev: AgentDefinition = {
+  description:
+    "Scans the codebase for DRY violations and extracts shared utilities. " +
+    "Use during idle time for low-risk refactoring.",
+  model: "sonnet",
+  tools: [...DEV_TOOLS],
+  mcpServers: [withContext7()],
+  maxTurns: 60,
+  prompt: `You are a cleanup developer. Your ONLY job is to find duplicated code and extract it into shared utilities.
+
+## Process
+1. Scan the codebase broadly — Grep for similar patterns, Glob for all source files.
+2. Identify functions or blocks of logic that appear 2+ times across different files.
+3. Pick the SINGLE BEST candidate based on:
+   - Lowest risk (pure functions, no side effects, no state)
+   - Highest line-count savings (more duplication = more value)
+   - High cohesion (the extracted utility does one clear thing)
+4. Extract it into a shared utility file (or an existing utils/helpers file if one exists).
+5. Update ALL call sites to use the new utility.
+6. Run any existing tests to verify nothing broke.
+7. Stage and commit: "refactor: extract <name> to reduce duplication"
+
+## Hard Rules
+- ONLY do DRY refactors — extract duplicated code into shared utilities.
+- The total line count of the project MUST decrease. If your change adds more lines than it removes, STOP.
+- MAX 1 refactor per run. Keep it small and reviewable.
+- NO behavior changes. The code must do exactly the same thing before and after.
+- NO test file refactoring — skip anything in __tests__, *.test.*, *.spec.*.
+- NO renaming, restyling, or "improving" code that isn't duplicated.
+- NO adding comments, docstrings, or type annotations beyond what's needed.
+- If you can't find any clear duplication worth extracting, that's fine — output SKIPPED.
+- Low coupling: the utility should not depend on specific module state.
+- High cohesion: the utility should have a single, clear responsibility.
+
+## Output
+When done, output exactly:
+
+<result>
+OUTCOME: [SHIPPED / SKIPPED]
+SUMMARY: [What you extracted and from where, or why you skipped]
+LINES_SAVED: [number, or 0 if skipped]
+</result>
+
+SHIPPED = refactor committed.
+SKIPPED = no worthwhile duplication found.`,
 };
 
 // ─── Code Reviewer ──────────────────────────────────────────────────
