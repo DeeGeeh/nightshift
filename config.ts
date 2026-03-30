@@ -33,6 +33,10 @@ export const CONFIG = {
   // Agent limits
   agentTimeoutMs: Number(process.env.AGENT_TIMEOUT_MS ?? 30 * 60_000), // 30 min
 
+  // CI gate
+  ciTimeoutMs: Number(process.env.CI_TIMEOUT_MS ?? 10 * 60_000), // 10 min
+  maxCIRetries: Number(process.env.MAX_CI_RETRIES ?? 2),
+
   // Manual overrides
   forceIssue: process.env.FORCE_ISSUE ?? null,
   once: process.env.ONCE === "true" || process.argv.includes("--once"),

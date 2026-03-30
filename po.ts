@@ -34,8 +34,9 @@ import { withContext7 } from "./mcps.ts";
 import { CONFIG } from "./config.ts";
 import type { LinearIssue } from "./linear.ts";
 import { addComment, addLabelToIssue, updateIssueState } from "./linear.ts";
-import { prepareBranch, branchHasCommits, pushAndCreatePR, returnToMain } from "./git.ts";
+import { prepareBranch, branchHasCommits, pushAndCreatePR, returnToMain, getDiffStats, getCommitLog } from "./git.ts";
 import type { PRResult } from "./git.ts";
+import { runCIGate, extractPRNumber } from "./ci-gate.ts";
 import { markSeen } from "./seen.ts";
 
 /**
@@ -216,21 +217,48 @@ ABANDONED = not worth fixing or not a real bug.
         try {
           const pr: PRResult = await pushAndCreatePR(branch, issue);
           console.log(`${tag} ✅ PR: ${pr.prUrl}`);
-          await addComment(
-            issue.id,
-            `✅ AI team shipped a fix: ${pr.prUrl}\n\n${cleanSummary.slice(0, 500)}`
-          );
-          await updateIssueState(issue.id, "in review");
-          await addLabelToIssue(issue.id, "auto-fix");
-          markSeen(issue, "done");
-          await returnToMain();
-          return {
-            outcome: "done",
-            prUrl: pr.prUrl,
-            summary: cleanSummary,
-            diffStats: pr.diffStats,
-            commitLog: pr.commitLog,
-          };
+
+          // ── CI Gate ──
+          const prNumber = extractPRNumber(pr.prUrl);
+          let ciPassed = true;
+          let ciSummary = "";
+
+          if (prNumber) {
+            const ci = await runCIGate(prNumber, branch, `fix(${issue.identifier.toLowerCase()})`, tag);
+            ciPassed = ci.passed;
+            ciSummary = ci.summary;
+          }
+
+          // Re-capture stats (may include CI fix commits)
+          const finalDiffStats = await getDiffStats(branch);
+          const finalCommitLog = await getCommitLog(branch);
+
+          if (ciPassed) {
+            await addComment(
+              issue.id,
+              `✅ AI team shipped a fix: ${pr.prUrl}\n\n${cleanSummary.slice(0, 500)}`
+            );
+            await updateIssueState(issue.id, "in review");
+            await addLabelToIssue(issue.id, "auto-fix");
+            markSeen(issue, "done");
+            await returnToMain();
+            return {
+              outcome: "done",
+              prUrl: pr.prUrl,
+              summary: cleanSummary,
+              diffStats: finalDiffStats,
+              commitLog: finalCommitLog,
+            };
+          } else {
+            await addComment(
+              issue.id,
+              `⚠️ AI team shipped a fix but CI is failing: ${pr.prUrl}\n\n${ciSummary}\n\n${cleanSummary.slice(0, 300)}`
+            );
+            await addLabelToIssue(issue.id, "needs-human");
+            markSeen(issue, "failed");
+            await returnToMain();
+            return { outcome: "needs-human", prUrl: pr.prUrl, summary: `CI failing: ${ciSummary}` };
+          }
         } catch (err: any) {
           console.error(`${tag} PR failed:`, err.message);
           await addComment(issue.id, `⚠️ Fix on \`${branch}\` but PR failed:\n\`\`\`\n${err.message}\n\`\`\``);

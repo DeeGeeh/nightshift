@@ -18,6 +18,7 @@ import {
   getCommitLog,
   sh,
 } from "./git.ts";
+import { runCIGate } from "./ci-gate.ts";
 import type { TeamResult } from "./po.ts";
 import {
   type PendingFeedback,
@@ -136,24 +137,31 @@ ESCALATED = feedback requires human judgment
     const commentIds = feedback.comments.map(c => c.id);
 
     if (shipped && hasNewCommits) {
+      await pushUpdates(feedback.branch);
+
+      // ── CI Gate ──
+      const ci = await runCIGate(feedback.prNumber, feedback.branch, `fix(${issueTag})`, tag);
+      if (!ci.passed) {
+        console.log(`${tag} CI failing after revision — may need human review`);
+      }
+
       const diffStats = await getDiffStats(feedback.branch);
       const commitLog = await getCommitLog(feedback.branch);
 
-      await pushUpdates(feedback.branch);
       markCommentsProcessed(commentIds);
 
       await replyToPR(
         feedback.prNumber,
-        `🤖 Addressed review feedback:\n\n${cleanSummary.slice(0, 500)}`
+        `🤖 Addressed review feedback:\n\n${cleanSummary.slice(0, 500)}${ci.passed ? "" : `\n\n⚠️ CI is still failing: ${ci.summary}`}`
       );
 
-      console.log(`${tag} ✅ Pushed revision`);
+      console.log(`${tag} ${ci.passed ? "✅" : "⚠️"} Pushed revision${ci.passed ? "" : " (CI failing)"}`);
       await returnToMain();
 
       return {
-        outcome: "done",
+        outcome: ci.passed ? "done" : "needs-human",
         prUrl: feedback.prUrl,
-        summary: cleanSummary,
+        summary: ci.passed ? cleanSummary : `CI failing: ${ci.summary}`,
         diffStats,
         commitLog,
       };

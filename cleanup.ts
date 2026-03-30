@@ -15,7 +15,10 @@ import {
   branchHasCommits,
   pushCleanupPR,
   returnToMain,
+  getDiffStats,
+  getCommitLog,
 } from "./git.ts";
+import { runCIGate, extractPRNumber } from "./ci-gate.ts";
 import type { TeamResult } from "./po.ts";
 
 export async function runCodeCleanup(): Promise<TeamResult> {
@@ -112,13 +115,27 @@ SUMMARY: [What was refactored, or why we skipped]
       try {
         const pr = await pushCleanupPR(branch);
         console.log(`[CLEANUP] PR: ${pr.prUrl}`);
+
+        // ── CI Gate ──
+        let ciPassed = true;
+        const prNumber = extractPRNumber(pr.prUrl);
+        if (prNumber) {
+          const ci = await runCIGate(prNumber, branch, "refactor", "[CLEANUP]");
+          ciPassed = ci.passed;
+          if (!ciPassed) {
+            console.log(`[CLEANUP] CI failing — PR needs human review`);
+          }
+        }
+
+        const finalDiffStats = await getDiffStats(branch);
+        const finalCommitLog = await getCommitLog(branch);
         await returnToMain();
         return {
-          outcome: "done",
+          outcome: ciPassed ? "done" : "failed",
           prUrl: pr.prUrl,
-          summary: cleanSummary,
-          diffStats: pr.diffStats,
-          commitLog: pr.commitLog,
+          summary: ciPassed ? cleanSummary : `CI failing — ${cleanSummary}`,
+          diffStats: finalDiffStats,
+          commitLog: finalCommitLog,
         };
       } catch (err: any) {
         console.error(`[CLEANUP] PR failed:`, err.message);

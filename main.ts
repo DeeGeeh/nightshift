@@ -19,12 +19,16 @@ import type { TeamResult } from "./po.ts";
 import { runCodeCleanup } from "./cleanup.ts";
 import { fetchPendingFeedback } from "./pr-feedback.ts";
 import { processRevision } from "./revise.ts";
+import { runCIGate, findPRsWithFailingCI } from "./ci-gate.ts";
+import { checkoutPRBranch, returnToMain } from "./git.ts";
 
 const activeIssues = new Set<string>();
 let shuttingDown = false;
 let shiftStartedAt: Date | null = null;
 let lastCleanupAt = 0;
 let lastFeedbackCheckAt = 0;
+let lastCICheckAt = 0;
+const ciFixAttempted = new Set<number>();
 
 // ─── Shift Changelog ────────────────────────────────────────────────
 
@@ -283,6 +287,46 @@ async function checkPRFeedback() {
   }
 }
 
+// ─── Failing CI Retry ────────────────────────────────────────────────
+
+async function checkFailingPRCI() {
+  if (activeIssues.size > 0 || CONFIG.forceIssue || CONFIG.dryRun) return;
+
+  const now = Date.now();
+  if (now - lastCICheckAt < 5 * 60_000) return;
+  lastCICheckAt = now;
+
+  try {
+    const failing = await findPRsWithFailingCI();
+    const fresh = failing.filter(pr => !ciFixAttempted.has(pr.prNumber));
+    if (fresh.length === 0) return;
+
+    console.log(`\n🔧 ${fresh.length} PR(s) with failing CI`);
+
+    for (const pr of fresh) {
+      if (shuttingDown || activeIssues.size > 0) break;
+      ciFixAttempted.add(pr.prNumber);
+
+      const tag = `[CI:#${pr.prNumber}]`;
+      console.log(`${tag} Attempting to fix CI on: ${pr.branch}`);
+
+      await checkoutPRBranch(pr.branch);
+      const ci = await runCIGate(pr.prNumber, pr.branch, "fix", tag);
+      await returnToMain();
+
+      shiftLog.push({
+        identifier: `CI:#${pr.prNumber}`,
+        title: `CI fix: ${pr.branch}`,
+        outcome: ci.passed ? "done" : "failed",
+        prUrl: pr.prUrl,
+        summary: ci.summary,
+      });
+    }
+  } catch (err: any) {
+    console.error("CI check error:", err.message);
+  }
+}
+
 // ─── Poll ────────────────────────────────────────────────────────────
 
 async function poll() {
@@ -345,6 +389,7 @@ async function poll() {
     if (issues.length === 0) {
       console.log(`\n\u{1f4ed} No issues found in Linear (backlog/unstarted/triage)`);
       await checkPRFeedback();
+      await checkFailingPRCI();
       await tryIdleCleanup();
       return;
     }
@@ -354,7 +399,6 @@ async function poll() {
       if (activeIssues.has(i.id)) return false;
       if (!CONFIG.retriage) {
         if (i.labels.nodes.some((l) => l.name === "needs-human")) return false;
-        if (i.labels.nodes.some((l) => l.name === "auto-fix")) return false;
       }
       return true;
     });
@@ -362,6 +406,7 @@ async function poll() {
     if (fresh.length === 0) {
       console.log(`\n\u{1f4ed} ${issues.length} issue(s) found but all already triaged or in progress`);
       await checkPRFeedback();
+      await checkFailingPRCI();
       await tryIdleCleanup();
       return;
     }
@@ -458,6 +503,8 @@ async function tick() {
       console.log(`\n\u{1f319} Shift started at ${formatTime(shiftStartedAt)}. Nightshift is active.\n`);
       wasOffShift = false;
       lastFeedbackCheckAt = 0; // force PR feedback check at shift start
+      lastCICheckAt = 0;       // force CI check at shift start
+      ciFixAttempted.clear();   // allow retrying PRs from previous shift
     }
     if (polling) return;
     polling = true;
